@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+aws_profile = "manara"
+aws_region  = "us-east-1"
+alert_email = "you@example.com"
+
+budget_limit_usd   = 5
+raw_retention_days = 30
+
+# Set to false if Bedrock model access is not enabled on your account.
+enable_bedrock   = true
+bedrock_model_id = "us.anthropic.claude-haiku-5-5"
+
+# Uncomment while developing the frontend locally.
+# extra_cors_origins = ["http://localhost:8000"]

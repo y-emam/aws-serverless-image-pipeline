@@ -1,0 +1,38 @@
+# Course material - not for the public repo
+PROJECT_BRIEF.md
+
+# Secrets and local config (commit only the *.example versions)
+*.tfvars
+!*.tfvars.example
+.env
+.env.*
+!.env.example
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+.terraform.lock.hcl.bak
+
+# Build artifacts
+build/
+dist/
+*.zip
+layers/**/python/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

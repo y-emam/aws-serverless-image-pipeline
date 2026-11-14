@@ -1,0 +1,300 @@
+{
+  "Comment": "Image pipeline: validate -> (thumbnail | full-size + watermark | AI tags + caption) -> metadata -> notify",
+  "TimeoutSeconds": 600,
+  "StartAt": "Validate",
+  "States": {
+    "Validate": {
+      "Type": "Task",
+      "Resource": "arn:${partition}:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${validate_arn}",
+        "Payload.$": "$"
+      },
+      "OutputPath": "$.Payload",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "Comment": "Unexpected error (S3 outage, timeout). The input from start_workflow carries image_id, key and uploaded_at, so the RECEIVED row can still be marked FAILED.",
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "IsValid"
+    },
+
+    "IsValid": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.valid",
+          "BooleanEquals": false,
+          "Next": "MarkFailed"
+        }
+      ],
+      "Default": "ProcessImage"
+    },
+
+    "ProcessImage": {
+      "Type": "Parallel",
+      "Comment": "The three branches do not depend on each other, so they run at the same time.",
+      "ResultPath": "$.outputs",
+      "Branches": [
+        {
+          "StartAt": "Thumbnail",
+          "States": {
+            "Thumbnail": {
+              "Type": "Task",
+              "Resource": "arn:${partition}:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${resize_arn}",
+                "Payload": {
+                  "image_id.$": "$.image_id",
+                  "bucket.$": "$.bucket",
+                  "key.$": "$.key",
+                  "variant": "thumb"
+                }
+              },
+              "OutputPath": "$.Payload",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2,
+                  "JitterStrategy": "FULL"
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FullSize",
+          "States": {
+            "FullSize": {
+              "Type": "Task",
+              "Resource": "arn:${partition}:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${resize_arn}",
+                "Payload": {
+                  "image_id.$": "$.image_id",
+                  "bucket.$": "$.bucket",
+                  "key.$": "$.key",
+                  "variant": "full"
+                }
+              },
+              "OutputPath": "$.Payload",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2,
+                  "JitterStrategy": "FULL"
+                }
+              ],
+              "Next": "Watermark"
+            },
+            "Watermark": {
+              "Type": "Task",
+              "Resource": "arn:${partition}:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${watermark_arn}",
+                "Payload.$": "$"
+              },
+              "OutputPath": "$.Payload",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2,
+                  "JitterStrategy": "FULL"
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "AiTagAndCaption",
+          "States": {
+            "AiTagAndCaption": {
+              "Type": "Task",
+              "Resource": "arn:${partition}:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ai_tag_arn}",
+                "Payload": {
+                  "image_id.$": "$.image_id",
+                  "bucket.$": "$.bucket",
+                  "key.$": "$.key"
+                }
+              },
+              "OutputPath": "$.Payload",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2,
+                  "JitterStrategy": "FULL"
+                },
+                {
+                  "Comment": "Rekognition throttling surfaces as a function error; back off and try again.",
+                  "ErrorEquals": ["ThrottlingException", "ProvisionedThroughputExceededException"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2,
+                  "JitterStrategy": "FULL"
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "WriteMetadata"
+    },
+
+    "WriteMetadata": {
+      "Type": "Task",
+      "Resource": "arn:${partition}:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${write_metadata_arn}",
+        "Payload": {
+          "execution.$": "$",
+          "cdn_domain": "${cdn_domain}"
+        }
+      },
+      "ResultSelector": {
+        "message.$": "$.Payload.message"
+      },
+      "ResultPath": "$.record",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "NotifySuccess"
+    },
+
+    "NotifySuccess": {
+      "Type": "Task",
+      "Resource": "arn:${partition}:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${topic_arn}",
+        "Subject": "Image processed",
+        "Message.$": "$.record.message"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Done"
+    },
+
+    "Done": {
+      "Type": "Succeed"
+    },
+
+    "MarkFailed": {
+      "Type": "Task",
+      "Comment": "Direct DynamoDB integration: no Lambda needed to flip the status.",
+      "Resource": "arn:${partition}:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${table_name}",
+        "Key": {
+          "image_id": { "S.$": "$.image_id" }
+        },
+        "UpdateExpression": "SET #status = :failed, error_type = :etype, error_cause = :cause, source_key = :key, uploaded_at = :uploaded, updated_at = :now",
+        "ConditionExpression": "attribute_not_exists(#status) OR #status <> :completed",
+        "ExpressionAttributeNames": { "#status": "status" },
+        "ExpressionAttributeValues": {
+          ":failed": { "S": "FAILED" },
+          ":completed": { "S": "COMPLETED" },
+          ":etype": { "S.$": "$.error.Error" },
+          ":cause": { "S.$": "States.JsonToString($.error)" },
+          ":key": { "S.$": "$.key" },
+          ":uploaded": { "S.$": "$.uploaded_at" },
+          ":now": { "S.$": "$$.State.EnteredTime" }
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "Comment": "Transient DynamoDB errors only; a failed condition (record already COMPLETED) is not retried.",
+          "ErrorEquals": ["DynamoDB.ProvisionedThroughputExceededException", "DynamoDB.ThrottlingException", "DynamoDB.RequestLimitExceeded", "DynamoDB.InternalServerErrorException", "DynamoDB.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.mark_failed_error",
+          "Next": "NotifyFailure"
+        }
+      ],
+      "Next": "NotifyFailure"
+    },
+
+    "NotifyFailure": {
+      "Type": "Task",
+      "Resource": "arn:${partition}:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${topic_arn}",
+        "Subject": "Image processing FAILED",
+        "Message.$": "States.JsonToString($)"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Failed"
+    },
+
+    "Failed": {
+      "Type": "Fail",
+      "Error": "ImageProcessingFailed",
+      "Cause": "See the FAILED record in DynamoDB and the failure email."
+    }
+  }
+}
