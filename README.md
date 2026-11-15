@@ -375,6 +375,10 @@ Rekognition. Demo photos are from [Unsplash](https://unsplash.com) (Unsplash Lic
 
 ![CloudWatch alarms](docs/screenshots/alarms.jpg)
 
+**SNS: the success email (one per processed image)**
+
+![Success email](docs/screenshots/email.jpg)
+
 **S3: lifecycle rules on the processed bucket**
 
 ![S3 lifecycle rules](docs/screenshots/s3-lifecycle.jpg)
