@@ -153,7 +153,9 @@ problems where a retry can help.
 
 **Standard-IA only above 128 KB.** Standard-IA charges every object as at least 128 KB and has
 a 30-day minimum. Thumbnails are usually smaller than that and would cost more in IA. The
-transition rule uses an object-size filter so only the larger images move.
+transition rule uses an object-size filter so only the larger images move. Since September 2024
+S3 also applies a 128 KB minimum to transitions by default (visible in the lifecycle screenshot);
+the explicit filter keeps the intent in the code instead of relying on that default.
 
 **Bedrock is optional and cannot break the pipeline.** Model access needs a one-time setup per
 account. If Bedrock returns an error, the image is still processed and simply has no caption.
@@ -360,6 +362,24 @@ Rekognition. Demo photos are from [Unsplash](https://unsplash.com) (Unsplash Lic
 **Phone layout**
 
 <img src="docs/screenshots/mobile.png" alt="Phone layout" width="320">
+
+**Step Functions: a successful execution, with the output of the AI step (Rekognition labels)**
+
+![Step Functions execution](docs/screenshots/stepfunctions.jpg)
+
+**DynamoDB: the metadata record for one image**
+
+![DynamoDB item](docs/screenshots/dynamodb.jpg)
+
+**CloudWatch: the 10 alarms, all OK**
+
+![CloudWatch alarms](docs/screenshots/alarms.jpg)
+
+**S3: lifecycle rules on the processed bucket**
+
+![S3 lifecycle rules](docs/screenshots/s3-lifecycle.jpg)
+
+The account id in the console screenshots is replaced with a placeholder.
 
 ## What I would add for production
 
