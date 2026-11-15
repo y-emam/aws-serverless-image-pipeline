@@ -13,7 +13,6 @@ This is my graduation project for the Manara course "AWS 2: Becoming a Solutions
 The AI tagging and captioning step is my own addition.
 
 - Live demo: https://dqy4z0thnvewm.cloudfront.net
-- Demo video: _link added after recording_
 
 The caption model is a Terraform variable (`bedrock_model_id`). The default is Claude Haiku 5.5
 (`us.anthropic.claude-haiku-5-5`). The live demo runs Amazon Nova Lite
