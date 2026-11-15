@@ -342,13 +342,24 @@ behind.
 
 ## Screenshots
 
-_Added after deployment:_
+All taken from the live demo. Captions come from Amazon Nova Lite on Bedrock, tags from Amazon
+Rekognition. Demo photos are from [Unsplash](https://unsplash.com) (Unsplash License).
 
-- `docs/screenshots/frontend.png`: upload page and gallery with tags and captions
-- `docs/screenshots/stepfunctions.png`: a successful execution graph
-- `docs/screenshots/stepfunctions-failed.png`: a failed execution caught and marked FAILED
-- `docs/screenshots/dynamodb.png`: image records
-- `docs/screenshots/email.png`: success notification
+**Upload page and gallery**
+
+![Upload page](docs/screenshots/home.png)
+
+**Gallery: processed images with captions and tags, and rejected uploads**
+
+![Gallery](docs/screenshots/gallery.png)
+
+**Full-size viewer: watermarked web copy, AI caption, Rekognition tags**
+
+![Viewer](docs/screenshots/viewer.png)
+
+**Phone layout**
+
+<img src="docs/screenshots/mobile.png" alt="Phone layout" width="320">
 
 ## What I would add for production
 
