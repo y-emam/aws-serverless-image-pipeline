@@ -1,7 +1,7 @@
 # Serverless Image Processing Pipeline on AWS
 
 Upload an image in the browser. A few seconds later it has been validated, resized into a
-thumbnail and a web-size copy, watermarked, tagged by Amazon Rekognition, captioned by a
+thumbnail and a full-size copy, watermarked, tagged by Amazon Rekognition, captioned by a
 model on Amazon Bedrock, recorded in DynamoDB, and served through CloudFront. You get
 an email either way.
 
@@ -18,6 +18,7 @@ The caption model is a Terraform variable (`bedrock_model_id`). The default is C
 (`us.anthropic.claude-haiku-5-5`). The live demo runs Amazon Nova Lite
 (`us.amazon.nova-lite-v1:0`) because Anthropic model access is still pending on the demo
 account. The code is the same for both, because it uses the model-agnostic Bedrock Converse API.
+The Claude Haiku path is covered by the unit tests; the deployed demo has only run Nova Lite.
 
 ## Contents
 
@@ -29,27 +30,28 @@ account. The code is the same for both, because it uses the model-agnostic Bedro
 - [Security](#security)
 - [Mapping to the course learning outcomes](#mapping-to-the-course-learning-outcomes)
 - [Cost estimate](#cost-estimate)
+- [Configuration](#configuration)
 - [Deploy](#deploy)
 - [Test](#test)
 - [Tear down](#tear-down)
 - [Repository layout](#repository-layout)
 - [Screenshots](#screenshots)
 - [What I would add for production](#what-i-would-add-for-production)
+- [License](#license)
 
 ## Architecture
 
-![Architecture diagram](docs/architecture.png)
+![Architecture diagram](docs/architecture-drawio.png)
 
-The diagram is generated from code: [`docs/diagram.py`](docs/diagram.py) uses the Python
-`diagrams` library with the official AWS icons.
-
-**Editable draw.io version.** The same architecture laid out by path (request path, event
-path, workflow, data stores, operations):
+The diagram is laid out by path: the request path (browser, CloudFront, API) on top, the event
+path (S3, SQS, Lambda, Step Functions) underneath, data stores and notifications on the right,
+operations at the bottom. It is generated from code ([`docs/drawio.py`](docs/drawio.py)) as an
+editable draw.io file:
 [open it in draw.io](https://app.diagrams.net/#Uhttps%3A%2F%2Fraw.githubusercontent.com%2Fy-emam%2Faws-serverless-image-pipeline%2Fmain%2Fdocs%2Farchitecture.drawio)
-or download [`docs/architecture.drawio`](docs/architecture.drawio). It is also generated from
-code ([`docs/drawio.py`](docs/drawio.py)).
+or download [`docs/architecture.drawio`](docs/architecture.drawio).
 
-![Architecture, draw.io version](docs/architecture-drawio.png)
+A second view, generated with the Python `diagrams` library and the official AWS icons
+([`docs/diagram.py`](docs/diagram.py)), is in [`docs/architecture.png`](docs/architecture.png).
 
 ## How it works
 
@@ -59,7 +61,7 @@ code ([`docs/drawio.py`](docs/drawio.py)).
    files of at most 10 MB, and expires after 5 minutes.
 2. **Upload straight to S3.** The browser sends the file directly to the private source bucket.
    The file never passes through API Gateway or Lambda, which avoids API Gateway's 10 MB request
-   limit and means we don't pay Lambda time for copying bytes.
+   limit and means no Lambda time is spent copying bytes.
 3. **S3 event to SQS.** The bucket sends an `ObjectCreated` notification for the `uploads/`
    prefix to an SQS queue. The queue has a dead-letter queue (DLQ) behind it.
 4. **A Lambda polls the queue.** The `start_workflow` function receives up to 10 messages per
@@ -76,11 +78,13 @@ code ([`docs/drawio.py`](docs/drawio.py)).
    ![Step Functions workflow](docs/workflow.png)
 
    1. `validate` reads the file and checks the real format with Pillow, not the file
-      extension. It also checks size and pixel count (decompression-bomb guard). A bad image is
-      marked `FAILED` with the reason.
+      extension (JPEG, including the multi-picture JPEGs many phones save, PNG and WebP). It also
+      checks size, pixel count (decompression-bomb guard) and that the file decodes completely,
+      so a truncated upload is rejected here. A bad image is marked `FAILED` with the reason.
+      Width and height are recorded as displayed, after the EXIF rotation.
    2. Three branches then run in parallel:
       - `resize` writes a 320 px thumbnail.
-      - `resize` writes a 1600 px copy to a private `staging/` prefix. `watermark` stamps it and
+      - `resize` writes a 1600 px full-size copy to a private `staging/` prefix. `watermark` stamps it and
         publishes it under `images/`, so an un-watermarked copy is never public.
       - `ai_tag` sends a downscaled copy to Rekognition `DetectLabels` for tags. It also asks
         Bedrock (through the Converse API) for one sentence of alt text.
@@ -107,24 +111,24 @@ code ([`docs/drawio.py`](docs/drawio.py)).
 | S3 pre-signed POST | Browser uploads | The browser uploads directly to a private bucket with no AWS credentials. A POST policy can enforce size and type on the S3 side, which a pre-signed PUT cannot. |
 | Amazon SQS + DLQ | Buffer between S3 and processing | Decouples upload from processing. Absorbs bursts, retries automatically, and parks poison messages in the DLQ. S3 can also invoke Lambda directly, but then there is no buffer and no redrive. |
 | AWS Lambda | All compute | Pay per millisecond, no servers, scales to zero. arm64 (Graviton) is about 20% cheaper than x86. |
-| Lambda layer | Pillow | Large native dependency packaged once and shared by four functions. It is built from manylinux wheels for arm64, so it imports on Lambda even though it is built on Windows. |
+| Lambda layer | Pillow | Large native dependency packaged once and shared by four functions. It is built from manylinux wheels for arm64, so it imports on Lambda even when built on Windows or macOS. |
 | AWS Step Functions (Standard) | Orchestration | Retries, error catching, parallel branches and a visual execution history, with no orchestration code to write. Standard, not Express: Standard runs each execution name exactly once (the duplicate-event protection relies on that) and keeps 90 days of execution history for debugging. Express is cheaper for high volume, but it is at-least-once and limited to 5 minutes per run. |
 | Amazon Rekognition | Image labels | Managed computer vision: one API call, no model to host. |
 | Amazon Bedrock | Captions (Claude Haiku 5.5 by default, Nova Lite on the demo account) | Managed access to foundation models, billed per token. The Converse API makes the model a configuration value. Optional: switch it off with `enable_bedrock = false`. |
 | Amazon DynamoDB | Image metadata | Key-value lookups by image id, on-demand billing, nothing to manage. RDS would bill by the hour even when idle. |
-| Amazon API Gateway (HTTP API) | Upload and gallery API | About 70% cheaper and faster than a REST API. We need none of the REST-only features (API keys, usage plans, request validation). |
+| Amazon API Gateway (HTTP API) | Upload and gallery API | About 70% cheaper and faster than a REST API. This project needs none of the REST-only features (API keys, usage plans, request validation). |
 | Amazon CloudFront + OAC | Serves site, images and API | Edge caching and HTTPS, buckets stay private, one domain for everything (no CORS for the API). OAC is the current replacement for the older Origin Access Identity. |
-| Amazon SNS | Email on success and failure, alarm notifications | Simple fan-out to email. Step Functions publishes to it directly, without a Lambda. |
+| Amazon SNS | Email on success and failure, alarm notifications | Simple fan-out to email. Step Functions publishes to it directly, without a Lambda. The topic is not KMS-encrypted: the AWS managed `aws/sns` key would block CloudWatch alarm notifications, and a customer managed key costs $1 a month. |
 | Amazon CloudWatch | Logs, 10 alarms | DLQ depth, errors per Lambda, failed executions. 10 standard alarms fit the free tier. |
 | AWS X-Ray | Tracing | Shows time spent per step across Lambda and Step Functions. Effectively free at this volume. |
 | AWS Budgets | $5 monthly budget alert | Created before anything else, so a mistake shows up in the inbox, not on the bill. |
-| Terraform | Infrastructure as code | The plan shows every change before it happens. Teardown is one command. It is the most requested IaC tool in job posts. |
+| Terraform | Infrastructure as code | The plan shows every change before it happens. Teardown is one command. |
 
 ## Design decisions and trade-offs
 
 **A Lambda consumer polls the queue (not EventBridge Pipes).** The brief asks for a Lambda
 function that polls the queue. EventBridge Pipes can connect SQS to Step Functions with no code,
-but the Lambda gives us three things the Pipe does not:
+but the Lambda adds three things the Pipe does not:
 - a `RECEIVED` row in DynamoDB
 - deterministic execution names for deduplication
 - per-message failure reporting
@@ -193,6 +197,7 @@ CloudFront domain only.
 | Any other error in the workflow | `Catch` -> row marked `FAILED` (unless already `COMPLETED`) -> failure email |
 | The consumer cannot start a workflow | The message returns to SQS; after 5 receives it goes to the DLQ -> `dlq-not-empty` alarm email |
 | Duplicate S3 event | Same execution name -> Step Functions rejects the duplicate -> treated as success |
+| Execution exceeds its 600 s timeout | The execution ends `TIMED_OUT` and the row stays `RECEIVED`. Not reachable with the current step timeouts (60 s max per Lambda); production would add an `ExecutionsTimedOut` alarm |
 
 Alarms (all email through SNS):
 - DLQ not empty
@@ -208,13 +213,16 @@ Alarms (all email through SNS):
     distribution's ARN.
 - **Least privilege:** one IAM role per function, scoped to exact resources:
   - `presign` can only `PutObject` under `uploads/`.
-  - `watermark` can only read and delete under `staging/` and write under `images/`.
+  - `watermark` can only read and delete under `staging/` and read and write under `images/`.
   - The consumer can only use its queue, start this one state machine and put rows in this
     one table.
-  - Rekognition and X-Ray use `*` only because those APIs don't support resource-level
-    permissions.
-- **Confused-deputy protection:** the S3-to-SQS queue policy and the service trust policies
-  check `aws:SourceArn` / `aws:SourceAccount`.
+  - Rekognition, X-Ray and the Step Functions log-delivery APIs use `*` only because they
+    don't support resource-level permissions.
+- **Confused-deputy protection:** the S3-to-SQS queue policy checks `aws:SourceArn` and
+  `aws:SourceAccount`, the Step Functions trust policy checks `aws:SourceAccount` and
+  `aws:SourceArn`, and each API Gateway invoke permission is scoped to its own route.
+- **Security headers:** HSTS, `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy`
+  on every CloudFront response, including the API.
 - **Image hygiene:**
   - EXIF metadata (including GPS location) is stripped from every output.
   - EXIF rotation is applied before stripping, so the image still displays the right way up.
@@ -255,13 +263,39 @@ Free-tier credits on a new account cover most of this.
 hour. What's left is storage (a few MB) and CloudWatch Logs retention (14 days). Rekognition is
 the largest variable cost; turning off Bedrock saves very little.
 
+## Configuration
+
+All settings are Terraform variables in [`infra/variables.tf`](infra/variables.tf). Set them in
+`infra/terraform.tfvars` (gitignored);
+[`infra/terraform.tfvars.example`](infra/terraform.tfvars.example) shows the common ones.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `alert_email` | (required) | Address for SNS notifications and the budget alert |
+| `aws_profile` | `null` | AWS CLI profile to deploy with |
+| `aws_region` | `us-east-1` | Region for everything (widest Bedrock model coverage) |
+| `project_name` | `manara-image-pipeline` | Name prefix for every resource and value of the `Project` tag |
+| `enable_bedrock` | `true` | Turn the Bedrock caption call (and its IAM permission) on or off |
+| `bedrock_model_id` | `us.anthropic.claude-haiku-5-5` | Caption model or inference profile, e.g. `us.amazon.nova-lite-v1:0` |
+| `max_upload_mb` | `10` | Largest upload, enforced by the POST policy and the validate step |
+| `thumbnail_px` / `full_px` | `320` / `1600` | Longest edge of the thumbnail and of the full-size copy |
+| `watermark_text` | `manara-image-pipeline` | Text stamped on the full-size copy (Latin characters) |
+| `raw_retention_days` | `30` | Days before raw uploads are deleted |
+| `processed_ia_after_days` | `30` | Days before processed images over 128 KB move to Standard-IA (minimum 30) |
+| `budget_limit_usd` | `5` | Monthly AWS Budgets limit |
+| `api_throttle_rate` / `api_throttle_burst` | `5` / `10` | API Gateway throttling for the public API |
+| `log_retention_days` | `14` | CloudWatch Logs retention |
+| `lambda_architecture` | `arm64` | `arm64` (cheaper) or `x86_64`; build the layer for the same one |
+| `extra_cors_origins` | `[]` | Extra browser origins for uploads, e.g. `http://localhost:8000` for local work |
+
 ## Deploy
 
 Prerequisites:
 - an AWS account
 - an AWS CLI profile with admin rights for setup
 - Terraform 1.9 or later
-- Python 3.12 or later
+- Python 3.12 or later on your machine (the Lambdas run Python 3.13 on arm64; the build script
+  downloads the matching wheels)
 
 Docker is optional.
 
@@ -269,9 +303,14 @@ Docker is optional.
 
        python scripts/build_layer.py
 
-2. **Create your variables file** (gitignored) and set `aws_profile` and `alert_email`:
+2. **Create your variables file** (gitignored) and set `aws_profile` and `alert_email`.
+   Linux, macOS or Git Bash:
 
-       cp infra/terraform.tfvars.example infra/terraform.tfvars        (Windows cmd: copy infra	erraform.tfvars.example infra	erraform.tfvars)
+       cp infra/terraform.tfvars.example infra/terraform.tfvars
+
+   Windows cmd:
+
+       copy infra\terraform.tfvars.example infra\terraform.tfvars
 
 3. **Create the budget alert first:**
 
@@ -300,13 +339,26 @@ images (a rotated JPEG, a transparent PNG, a small WebP, a GIF and a text file n
 They run offline with fake credentials:
 
     python -m venv .venv
-    .venv/Scripts/pip install -r requirements-dev.txt      (Linux/macOS: .venv/bin/pip)
-    .venv/Scripts/python -m pytest
+
+Then on Windows (cmd or PowerShell):
+
+    .venv\Scripts\pip install -r requirements-dev.txt
+    .venv\Scripts\python -m pytest
+
+Or on Linux and macOS:
+
+    .venv/bin/pip install -r requirements-dev.txt
+    .venv/bin/python -m pytest
 
 **End-to-end test** against the deployed stack:
 
-    AWS_PROFILE=<your profile> python tests/e2e/e2e_test.py                  (bash)
-    $env:AWS_PROFILE="<your profile>"; python tests/e2e/e2e_test.py         (PowerShell)
+bash:
+
+    AWS_PROFILE=<your profile> python tests/e2e/e2e_test.py
+
+PowerShell:
+
+    $env:AWS_PROFILE="<your profile>"; python tests/e2e/e2e_test.py
 
 It uploads a real image and checks:
 - the row reaches `COMPLETED` with tags
@@ -314,6 +366,7 @@ It uploads a real image and checks:
 - both images are served by CloudFront
 - the processed bucket returns 403 when accessed directly
 - the gallery API lists the image
+- the API rejects a non-image content type (400)
 
 It then uploads a text file disguised as a JPEG and checks that it ends as `FAILED` /
 `InvalidImage`. Last run against the deployed stack: all checks passed, 13 seconds from upload
@@ -323,6 +376,10 @@ to `COMPLETED`.
 http://localhost:8000 and proxies `/api` and `/images` to the deployed CloudFront URL:
 
     python scripts/dev_server.py https://<your-distribution>.cloudfront.net
+
+The gallery works as is. To upload from the preview, set
+`extra_cors_origins = ["http://localhost:8000"]` and apply, so the source bucket accepts the
+browser's POST from that origin.
 
 ## Tear down
 
@@ -345,8 +402,8 @@ behind.
     tests/unit/             pytest + moto
     tests/e2e/              end-to-end test against a deployed stack
     tests/images/           test images and the script that generates them
-    docs/                   architecture diagram (code, PNG, draw.io), workflow diagram
-                            (generated from the ASL), demo script, screenshots
+    docs/                   architecture diagrams (draw.io and diagrams library, both from code),
+                            workflow diagram (generated from the ASL), screenshots
 
 ## Screenshots
 
@@ -361,7 +418,7 @@ Rekognition. Demo photos are from [Unsplash](https://unsplash.com) (Unsplash Lic
 
 ![Gallery](docs/screenshots/gallery.png)
 
-**Full-size viewer: watermarked web copy, AI caption, Rekognition tags**
+**Full-size viewer: watermarked full-size copy, AI caption, Rekognition tags**
 
 ![Viewer](docs/screenshots/viewer.png)
 
@@ -377,7 +434,7 @@ Rekognition. Demo photos are from [Unsplash](https://unsplash.com) (Unsplash Lic
 
 ![DynamoDB item](docs/screenshots/dynamodb.jpg)
 
-**CloudWatch: the 10 alarms, all OK**
+**CloudWatch: the alarm list (all 10 alarms OK; 8 visible in the screenshot)**
 
 ![CloudWatch alarms](docs/screenshots/alarms.jpg)
 
@@ -403,3 +460,7 @@ The account id in the console screenshots is replaced with a placeholder.
 - **Remote Terraform state:** an S3 backend with state locking and a CI pipeline that runs
   `plan` on pull requests.
 - **Content moderation:** Rekognition `DetectModerationLabels` before an image is published.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

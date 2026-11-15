@@ -109,3 +109,19 @@ def test_apply_watermark_handles_tiny_images(watermark):
     Image.new("RGB", (20, 20), "white").save(buf, "JPEG")
     out = watermark.apply_watermark(buf.getvalue(), "manara-image-pipeline")
     assert Image.open(io.BytesIO(out)).size == (20, 20)
+
+
+def test_watermark_retry_raises_if_nothing_was_published(watermark, aws):
+    # Staging copy and final image both missing: a real error, must not report success.
+    with pytest.raises(Exception):
+        watermark.handler({"image_id": "ghost", "bucket": DEST, "key": "staging/ghost/full.jpg"}, None)
+
+
+def test_16_bit_grayscale_png_is_not_washed_out(resize):
+    img = Image.new("I;16", (50, 50))
+    img.putdata([20000] * (50 * 50))  # mid grey in 16-bit
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    body, _, _ = resize.resize_bytes(buf.getvalue(), 320, 80)
+    value = Image.open(io.BytesIO(body)).convert("L").getpixel((25, 25))
+    assert 60 < value < 100  # about 20000 / 256 = 78, not clipped to 255

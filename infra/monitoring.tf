@@ -36,7 +36,7 @@ resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
 
 resource "aws_cloudwatch_metric_alarm" "workflow_failed" {
   alarm_name          = "${local.name}-workflow-failed"
-  alarm_description   = "A Step Functions execution failed, timed out or was aborted."
+  alarm_description   = "A Step Functions execution failed (rejected uploads end in Succeed and do not count)."
   namespace           = "AWS/States"
   metric_name         = "ExecutionsFailed"
   dimensions          = { StateMachineArn = aws_sfn_state_machine.pipeline.arn }

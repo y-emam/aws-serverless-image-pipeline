@@ -73,8 +73,8 @@ def build_message(item, cdn_domain):
 
 def handler(event, context):
     item = build_item(event["execution"])
-    # put_item overwrites: a duplicate S3 event re-processes the same image id
-    # and simply rewrites the same record (idempotent).
+    # put_item overwrites: a Step Functions retry of this step rewrites the
+    # same record (idempotent). It also replaces the RECEIVED row.
     _table().put_item(Item=item)
     logger.info("Wrote COMPLETED record %s", item["image_id"])
     return {

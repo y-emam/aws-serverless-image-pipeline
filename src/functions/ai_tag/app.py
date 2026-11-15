@@ -43,10 +43,23 @@ def _bedrock():
     return boto3.client("bedrock-runtime")
 
 
+def to_rgb(img):
+    """Same flattening as the resize step (transparency onto white), so the AI
+    services see the same pixels as the users do."""
+    if img.mode.startswith("I"):
+        img = img.point(lambda v: v / 256).convert("L")
+    if img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info):
+        rgba = img.convert("RGBA")
+        background = Image.new("RGB", rgba.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.split()[-1])
+        return background
+    return img.convert("RGB")
+
+
 def downscale_jpeg(data):
     with Image.open(io.BytesIO(data)) as img:
         img.draft("RGB", (AI_MAX_PX * 2, AI_MAX_PX * 2))  # cheap JPEG downscale while decoding
-        img = ImageOps.exif_transpose(img).convert("RGB")
+        img = to_rgb(ImageOps.exif_transpose(img))
         img.thumbnail((AI_MAX_PX, AI_MAX_PX))
         out = io.BytesIO()
         img.save(out, "JPEG", quality=85)

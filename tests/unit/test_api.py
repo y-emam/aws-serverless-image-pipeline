@@ -78,3 +78,25 @@ def test_list_images_sorted_newest_first_and_json_safe(list_images, aws):
 def test_list_images_empty(list_images):
     images = json.loads(list_images.handler({}, None)["body"])["images"]
     assert images == []
+
+
+@pytest.mark.parametrize("raw", ["null", "[]", "5", '"text"'])
+def test_presign_rejects_json_that_is_not_an_object(presign, raw):
+    assert presign.handler({"body": raw}, None)["statusCode"] == 400
+
+
+def test_presign_accepts_base64_body(presign):
+    import base64
+
+    raw = base64.b64encode(json.dumps({"content_type": "image/png"}).encode()).decode()
+    res = presign.handler({"body": raw, "isBase64Encoded": True}, None)
+    assert res["statusCode"] == 200
+
+
+def test_list_images_caps_results(list_images, aws):
+    with aws["table"].batch_writer() as batch:
+        for i in range(75):
+            batch.put_item(Item={"image_id": f"id{i:03d}", "status": "COMPLETED", "uploaded_at": f"2026-11-01T00:{i // 60:02d}:{i % 60:02d}Z"})
+    images = json.loads(list_images.handler({}, None)["body"])["images"]
+    assert len(images) == list_images.MAX_ITEMS
+    assert images[0]["image_id"] == "id074"  # newest first

@@ -27,8 +27,14 @@ def _s3():
 
 
 def to_rgb(img):
-    """JPEG has no alpha channel: flatten transparency onto white."""
-    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+    """JPEG has no alpha channel: flatten transparency onto white.
+
+    16/32-bit grayscale PNGs (mode I;16 / I) are scaled to 8 bits first;
+    a plain convert("RGB") would clip them to white.
+    """
+    if img.mode.startswith("I"):
+        img = img.point(lambda v: v / 256).convert("L")
+    if img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info):
         rgba = img.convert("RGBA")
         background = Image.new("RGB", rgba.size, (255, 255, 255))
         background.paste(rgba, mask=rgba.split()[-1])

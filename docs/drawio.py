@@ -32,7 +32,7 @@ NODES = {
     "source": ("Source bucket<br>uploads/, expire 30 d", "s3", "storage", 220, 520),
     "queue": ("SQS queue<br>visibility 180 s", "sqs", "integration", 420, 520),
     "dlq": ("DLQ<br>after 5 receives", "sqs", "integration", 420, 700),
-    "consumer": ("start_workflow<br>SQS poller, batch 10", "lambda", "compute", 620, 520),
+    "consumer": ("start_workflow<br>SQS poller, batch 10<br>writes RECEIVED row", "lambda", "compute", 620, 520),
     "sfn": ("Step Functions<br>Standard", "step_functions", "integration", 820, 520),
 
     "validate": ("validate", "lambda", "compute", 1000, 520),
@@ -48,8 +48,8 @@ NODES = {
     "sns": ("SNS<br>email", "sns", "integration", 1580, 640),
 
     "cw": ("CloudWatch<br>10 alarms + logs", "cloudwatch_2", "mgmt", 1580, 850),
-    "xray": ("X-Ray", "xray", "mgmt", 820, 850),
-    "budget": ("AWS Budgets<br>$5 / month", "budgets", "cost", 620, 850),
+    "xray": ("X-Ray", "xray", "mgmt", 820, 880),
+    "budget": ("AWS Budgets<br>$5 / month", "budgets", "cost", 620, 880),
 }
 
 RIGHT_IN = "exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;"
@@ -89,13 +89,19 @@ EDGES = [
     ("ai", "meta", "", "exitX=1;exitY=0.5;entryX=0;entryY=0.5;", [(1290, 672), (1290, 552)]),
     ("ai", "rek", "", "exitX=0;exitY=1;entryX=0.5;entryY=0;", [(1180, 800), (1132, 800)]),
     ("ai", "bedrock", "", "exitX=1;exitY=1;entryX=0.5;entryY=0;dashed=1;", [(1244, 800), (1292, 800)]),
-    ("thumb", "processed", "thumb.jpg", "exitX=1;exitY=0.25;entryX=0;entryY=0.5;", [(1500, 416), (1500, 432)]),
+    # edges from the workflow box as a whole (Step Functions does these, or several steps do)
+    ("source", "wf", "GetObject (originals)", "exitX=0.5;exitY=1;entryX=0.5;entryY=1;dashed=1;", [(252, 810), (1220, 810)]),
+    ("wf", "processed", "images/", "exitX=1;exitY=0.16;entryX=0;entryY=0.5;", []),
     ("meta", "table", "COMPLETED", RIGHT_IN, []),
-    ("meta", "sns", "notify", "exitX=1;exitY=0.75;entryX=0;entryY=0.5;", [(1460, 568), (1460, 672)]),
+    ("wf", "table", "FAILED", "exitX=1;exitY=0.56;entryX=0;entryY=0.95;dashed=1;strokeColor=#C62828;fontColor=#C62828;", []),
+    ("wf", "sns", "notify", "exitX=1;exitY=0.85;entryX=0;entryY=0.5;", []),
 
     # ops
     ("cw", "sns", "alarms", "exitX=1;exitY=0.5;entryX=1;entryY=0.5;dashed=1;strokeColor=#888888;fontColor=#888888;", [(1740, 882), (1740, 672)]),
 ]
+
+
+LABEL_ABOVE = {"source"}
 
 
 def node_xml(nid, label, icon, cat, x, y):
@@ -108,6 +114,8 @@ def node_xml(nid, label, icon, cat, x, y):
             "verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;aspect=fixed;"
             f"shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.{icon};fillColor={COLORS[cat]};"
         )
+        if nid in LABEL_ABOVE:
+            style = style.replace("verticalLabelPosition=bottom;verticalAlign=top;", "verticalLabelPosition=top;verticalAlign=bottom;")
     return (
         f'<mxCell id="{nid}" value="{escape(label, {chr(34): "&quot;"})}" style="{style}" vertex="1" parent="1">'
         f'<mxGeometry x="{x}" y="{y}" width="{ICON}" height="{ICON}" as="geometry"/></mxCell>'
@@ -126,9 +134,9 @@ def edge_xml(i, src, dst, label, extra, points):
     )
 
 
-def box(cid, label, x, y, w, h, color, dashed=True, valign="top"):
+def box(cid, label, x, y, w, h, color, dashed=True, valign="top", align="left"):
     style = (f"rounded=1;arcSize=4;{'dashed=1;' if dashed else ''}fillColor=none;strokeColor={color};"
-             f"verticalAlign={valign};spacingBottom=6;align=left;spacingLeft=10;spacingTop=4;fontSize=12;fontStyle=1;fontColor={color};html=1;")
+             f"verticalAlign={valign};spacingBottom=6;align={align};spacingRight=10;spacingLeft=10;spacingTop=4;fontSize=12;fontStyle=1;fontColor={color};html=1;")
     return (f'<mxCell id="{cid}" value="{escape(label)}" style="{style}" vertex="1" parent="1">'
             f'<mxGeometry x="{x}" y="{y}" width="{w}" height="{h}" as="geometry"/></mxCell>')
 
@@ -142,10 +150,10 @@ def main():
     )
     # background boxes first so they sit behind the icons
     cells.append(box("lane_req", "Request path", 190, 70, 560, 350, "#8C4FFF"))
-    cells.append(box("lane_evt", "Event path", 190, 480, 760, 320, "#E7157B"))
+    cells.append(box("lane_evt", "Event path", 190, 480, 760, 320, "#E7157B", align="right"))
     cells.append(box("wf", "Step Functions workflow (Parallel: thumbnail | full + watermark | AI)", 970, 370, 500, 380, "#E7157B", dashed=False))
     cells.append(box("data", "Data and notifications", 1550, 370, 180, 440, "#C925D1", valign="bottom"))
-    cells.append(box("ops", "Operations", 590, 820, 320, 125, "#545B64"))
+    cells.append(box("ops", "Operations", 590, 850, 320, 125, "#545B64"))
     cells += [node_xml(nid, *spec) for nid, spec in NODES.items()]
     cells += [edge_xml(i, *e) for i, e in enumerate(EDGES)]
     xml = (

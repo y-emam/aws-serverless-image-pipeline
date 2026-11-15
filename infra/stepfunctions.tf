@@ -10,6 +10,12 @@ data "aws_iam_policy_document" "sfn_assume" {
       variable = "aws:SourceAccount"
       values   = [local.account_id]
     }
+    # Built as a string (not the resource ARN) to avoid a dependency cycle.
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:${local.partition}:states:${local.region}:${local.account_id}:stateMachine:${local.name}-pipeline"]
+    }
   }
 }
 

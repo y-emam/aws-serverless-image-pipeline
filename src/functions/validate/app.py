@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import struct
 import warnings
 from datetime import datetime, timezone
 from functools import cache
@@ -26,7 +27,12 @@ from PIL import Image, UnidentifiedImageError
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
-ALLOWED_FORMATS = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
+# MPO is a JPEG with extra frames (multi-picture format). Samsung phones and
+# iPhone portrait/HDR photos are often saved this way; the first frame is a normal JPEG.
+ALLOWED_FORMATS = {"JPEG": "image/jpeg", "MPO": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
+
+# EXIF orientations that rotate the image by 90 or 270 degrees (width and height swap).
+SWAPPED_ORIENTATIONS = {5, 6, 7, 8}
 
 
 class BadEventError(Exception):
@@ -127,13 +133,26 @@ def handler(event, context):
                 img.verify()  # checks the file structure without decoding all pixels
             with Image.open(io.BytesIO(data)) as img:
                 fmt, (width, height) = img.format, img.size
+                if fmt not in ALLOWED_FORMATS:
+                    return invalid(f"Format {fmt} is not allowed")  # before decoding anything
+                rotated = img.getexif().get(0x0112) in SWAPPED_ORIENTATIONS
+                # verify() does not catch a truncated file. Decoding it (at reduced
+                # scale for JPEG, so it stays cheap) does, so a cut-off upload is
+                # rejected here instead of crashing the resize step.
+                img.draft("RGB", (1024, 1024))
+                img.load()
     except (UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
         return invalid(f"Not a readable image: {exc.__class__.__name__}")
-    except (OSError, SyntaxError, ValueError) as exc:
+    except (OSError, SyntaxError, ValueError, struct.error) as exc:
         return invalid(f"Corrupt image: {exc}")
 
     if fmt not in ALLOWED_FORMATS:
         return invalid(f"Format {fmt} is not allowed")
+    if fmt == "MPO":
+        fmt = "JPEG"  # report it as what it is to users: a JPEG photo
+
+    if rotated:
+        width, height = height, width  # report the size as displayed, not as stored
 
     result.update(
         valid=True,

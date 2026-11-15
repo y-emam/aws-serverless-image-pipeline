@@ -1,6 +1,6 @@
 """POST /api/uploads -> pre-signed S3 POST for a single image upload.
 
-Request body: {"filename": "cat.jpg", "content_type": "image/jpeg"}
+Request body: {"content_type": "image/jpeg"}   (a "filename" field is accepted and ignored)
 Response:     {"image_id": "...", "key": "uploads/<id>.jpg", "url": "...", "fields": {...}}
 
 A pre-signed POST (not PUT) is used because its policy can enforce the exact
@@ -8,6 +8,7 @@ key, the content type and a maximum size on the S3 side, before any byte of a
 bad upload is stored.
 """
 
+import base64
 import json
 import logging
 import os
@@ -51,12 +52,12 @@ def handler(event, context):
     try:
         raw = event.get("body") or "{}"
         if event.get("isBase64Encoded"):
-            import base64
-
             raw = base64.b64decode(raw).decode("utf-8")
         body = json.loads(raw)
     except (ValueError, TypeError):
         return _response(400, {"error": "Body must be JSON."})
+    if not isinstance(body, dict):
+        return _response(400, {"error": "Body must be a JSON object."})
 
     content_type = str(body.get("content_type", "")).lower().strip()
     if content_type not in ALLOWED_TYPES:

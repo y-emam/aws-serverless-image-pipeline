@@ -38,7 +38,8 @@ resource "aws_apigatewayv2_stage" "default" {
     destination_arn = aws_cloudwatch_log_group.api.arn
     format = jsonencode({
       requestId = "$context.requestId"
-      ip        = "$context.identity.sourceIp"
+      ip        = "$context.identity.sourceIp" # behind CloudFront this is the edge IP
+      userAgent = "$context.identity.userAgent"
       route     = "$context.routeKey"
       status    = "$context.status"
       latency   = "$context.responseLatency"
@@ -70,12 +71,13 @@ resource "aws_apigatewayv2_route" "this" {
   target    = "integrations/${aws_apigatewayv2_integration.lambda[each.value].id}"
 }
 
+# Each function can be invoked only by its own route (method + path).
 resource "aws_lambda_permission" "api" {
-  for_each = toset(values(local.api_routes))
+  for_each = local.api_routes
 
-  statement_id  = "AllowApiGatewayInvoke"
+  statement_id  = "AllowApiRoute${split(" ", each.key)[0]}"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.this[each.key].function_name
+  function_name = aws_lambda_function.this[each.value].function_name
   principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.http.execution_arn}/*/*"
+  source_arn    = "${aws_apigatewayv2_api.http.execution_arn}/*/${split(" ", each.key)[0]}${split(" ", each.key)[1]}"
 }

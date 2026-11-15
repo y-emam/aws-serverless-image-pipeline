@@ -108,3 +108,12 @@ def test_image_id_rule_matches_validate_step():
     consumer = load_function("start_workflow")
     for key in ["uploads/abc.jpg", "uploads/my photo.jpeg", "uploads/x.y.png", "uploads/.webp"]:
         assert consumer.image_id_from_key(key) == validate.image_id_from_key(key)
+
+
+def test_execution_name_uses_only_allowed_characters(consumer):
+    import re
+
+    fn, _, _ = consumer
+    record = {"s3": {"object": {"key": "uploads/a b+c.jpg"}}, "eventTime": "2026-11-15T10:00:00Z"}
+    name = fn.execution_name(fn.image_id_from_key("uploads/a b+c.jpg"), record)  # no sequencer: hash fallback
+    assert re.fullmatch(r"[A-Za-z0-9_-]{1,80}", name)

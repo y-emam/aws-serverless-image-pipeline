@@ -5,7 +5,7 @@
 
 const API = window.API_BASE || "";
 const CDN = window.CDN_BASE || "";
-const MAX_BYTES = 10 * 1024 * 1024;
+const HARD_MAX_BYTES = 50 * 1024 * 1024; // sanity cap only; the API returns the real limit (max_bytes)
 const ALLOWED = ["image/jpeg", "image/png", "image/webp"];
 
 const $ = (id) => document.getElementById(id);
@@ -25,6 +25,8 @@ let filter = "all";
 let pendingId = null;
 let previewUrl = null;
 let pollTimer = null;
+let lastJson = "";        // skip re-rendering when the gallery data has not changed
+const seen = new Set();   // image ids already shown: only new cards animate in
 
 // ---------------------------------------------------------------- helpers
 
@@ -71,6 +73,8 @@ function setStep(step, state = "active") {
 function setBar(percent, indeterminate = false) {
   barFill.parentElement.classList.toggle("indeterminate", indeterminate);
   barFill.style.width = `${percent}%`;
+  if (indeterminate) barFill.parentElement.removeAttribute("aria-valuenow");
+  else barFill.parentElement.setAttribute("aria-valuenow", String(percent));
 }
 
 // ---------------------------------------------------------------- file selection
@@ -78,7 +82,7 @@ function setBar(percent, indeterminate = false) {
 function selectFile(file) {
   if (!file) return;
   if (!ALLOWED.includes(file.type)) return setStatus("Please choose a JPEG, PNG or WebP image.", "bad");
-  if (file.size > MAX_BYTES) return setStatus(`That file is ${formatBytes(file.size)}. The limit is 10 MB.`, "bad");
+  if (file.size > HARD_MAX_BYTES) return setStatus(`That file is ${formatBytes(file.size)}, which is too large.`, "bad");
 
   if (previewUrl) URL.revokeObjectURL(previewUrl);
   previewUrl = URL.createObjectURL(file);
@@ -108,10 +112,12 @@ function resetForm() {
 fileInput.addEventListener("change", () => selectFile(fileInput.files[0]));
 clearBtn.addEventListener("click", () => { resetForm(); progress.hidden = true; setStatus(""); });
 
-["dragenter", "dragover"].forEach((ev) =>
-  dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add("drag"); }));
-["dragleave", "drop"].forEach((ev) =>
-  dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.remove("drag"); }));
+// Counter instead of a flag: dragleave also fires when moving over child elements.
+let dragDepth = 0;
+dropzone.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; dropzone.classList.add("drag"); });
+dropzone.addEventListener("dragover", (e) => e.preventDefault());
+dropzone.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; dropzone.classList.remove("drag"); } });
+dropzone.addEventListener("drop", (e) => { e.preventDefault(); dragDepth = 0; dropzone.classList.remove("drag"); });
 dropzone.addEventListener("drop", (e) => selectFile(e.dataTransfer.files[0]));
 
 // ---------------------------------------------------------------- upload
@@ -155,6 +161,9 @@ form.addEventListener("submit", async (event) => {
     setBar(5);
     setStatus("Requesting a pre-signed upload URL...");
     const target = await requestUpload(file);
+    if (file.size > target.max_bytes) {
+      throw new Error(`That file is ${formatBytes(file.size)}. The limit is ${formatBytes(target.max_bytes)}.`);
+    }
 
     step = "upload";
     setStep(step);
@@ -211,11 +220,17 @@ async function refresh() {
   try {
     const res = await fetch(`${API}/api/images`, { cache: "no-store" });
     if (!res.ok) throw new Error(`API returned ${res.status}`);
-    const fresh = (await res.json()).images;
-    // Keep the local preview card until the server knows about the image.
+    const text = await res.text();
+    const fresh = JSON.parse(text).images;
+    // Keep the local preview card until the server has a final result for the image.
+    for (const old of images.filter((i) => i._local && i.image_id !== pendingId)) URL.revokeObjectURL(old._local);
     const local = images.find((i) => i._local && i.image_id === pendingId);
-    const serverHasIt = local && fresh.some((i) => i.image_id === local.image_id && i.status !== "RECEIVED");
-    images = local && !serverHasIt ? [local, ...fresh.filter((i) => i.image_id !== local.image_id)] : fresh;
+    const keepLocal = local && local.image_id === pendingId &&
+      !fresh.some((i) => i.image_id === local.image_id && (i.status === "COMPLETED" || i.status === "FAILED"));
+    if (local && !keepLocal) URL.revokeObjectURL(local._local); // free the preview blob
+    if (!keepLocal && text === lastJson) return images;         // nothing changed: no re-render, no flicker
+    lastJson = text;
+    images = keepLocal ? [local, ...fresh.filter((i) => i.image_id !== local.image_id)] : fresh;
     render();
   } catch (err) {
     if (!images.length) gallery.replaceChildren(el("p", { class: "empty" }, `Could not load the gallery: ${err.message}`));
@@ -234,7 +249,14 @@ function tagList(tags = [], max = 4) {
 function card(img) {
   const done = img.status === "COMPLETED";
   const failed = img.status === "FAILED";
-  const node = el("article", { class: `card${done ? " clickable" : ""}`, tabindex: done ? "0" : null });
+  const isNew = !seen.has(img.image_id + img.status);
+  seen.add(img.image_id + img.status);
+  const node = el("article", {
+    class: `card${done ? " clickable" : ""}${isNew ? " new" : ""}`,
+    tabindex: done ? "0" : null,
+    role: done ? "button" : null,
+    "aria-label": done ? `View details: ${img.caption || (img.tags || []).join(", ") || "processed image"}` : null,
+  });
   const media = el("div", { class: "media" });
 
   if (done) {
@@ -305,7 +327,7 @@ function openViewer(img) {
   $("viewer-tags").replaceChildren(...(img.tags || []).map((t) => el("span", { class: "tag" }, t)));
   const meta = [
     ["Original", `${img.width} x ${img.height} ${img.format || ""}`],
-    ["Web copy", img.full_width ? `${img.full_width} x ${img.full_height} JPEG, watermarked` : "-"],
+    ["Full-size copy", img.full_width ? `${img.full_width} x ${img.full_height} JPEG, watermarked` : "-"],
     ["Uploaded", img.uploaded_at ? new Date(img.uploaded_at).toLocaleString() : "-"],
     ["Processed", img.processed_at ? new Date(img.processed_at).toLocaleString() : "-"],
     ["Image id", img.image_id],

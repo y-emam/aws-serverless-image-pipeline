@@ -116,7 +116,9 @@ locals {
             actions = ["bedrock:InvokeModel"]
             resources = [
               "arn:${local.partition}:bedrock:*::foundation-model/${local.bedrock_base_model}",
-              "arn:${local.partition}:bedrock:*:${local.account_id}:inference-profile/${var.bedrock_model_id}",
+              # The profile lives in this region; the model ARN needs "*" because a
+              # cross-region profile routes requests to other US regions.
+              "arn:${local.partition}:bedrock:${local.region}:${local.account_id}:inference-profile/${var.bedrock_model_id}",
             ]
           },
         ] : []

@@ -38,7 +38,7 @@ def test_accepts_every_event_shape(validate, aws, event_factory):
     out = validate.handler(event_factory("uploads/abc123.jpg"), None)
     assert out["valid"] is True
     assert out["image_id"] == "abc123"
-    assert (out["width"], out["height"], out["format"]) == (800, 600, "JPEG")
+    assert (out["width"], out["height"], out["format"]) == (600, 800, "JPEG")  # EXIF rotation applied
 
 
 def test_url_encoded_key_is_decoded(validate, aws):
@@ -105,3 +105,49 @@ def test_key_outside_upload_prefix_is_invalid(validate, aws):
 def test_unparseable_event_raises(validate, event):
     with pytest.raises(validate.BadEventError):
         validate.handler(event, None)
+
+
+def _jpeg(size=(800, 600), **save_kwargs):
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", size, (200, 120, 40)).save(buf, "JPEG", **save_kwargs)
+    return buf.getvalue()
+
+
+def test_accepts_mpo_phone_photo_as_jpeg(validate, aws):
+    """Samsung / iPhone portrait shots are MPO: a JPEG plus extra frames."""
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    first, second = Image.new("RGB", (640, 480), "red"), Image.new("RGB", (640, 480), "blue")
+    first.save(buf, "MPO", save_all=True, append_images=[second])
+    put(aws, "uploads/mpo.jpg", buf.getvalue())
+    out = validate.handler({"bucket": SOURCE, "key": "uploads/mpo.jpg"}, None)
+    assert out["valid"] is True
+    assert out["format"] == "JPEG" and out["content_type"] == "image/jpeg"
+
+
+def test_rejects_truncated_jpeg(validate, aws):
+    data = image_bytes("photo_rotated.jpg")
+    put(aws, "uploads/cut.jpg", data[: len(data) // 2])
+    out = validate.handler({"bucket": SOURCE, "key": "uploads/cut.jpg"}, None)
+    assert out["valid"] is False and out["error"]["Error"] == "InvalidImage"
+
+
+def test_reports_displayed_size_for_rotated_photo(validate, aws):
+    put(aws, "uploads/rot.jpg", image_bytes("photo_rotated.jpg"))  # stored 800x600, EXIF "rotate 90"
+    out = validate.handler({"bucket": SOURCE, "key": "uploads/rot.jpg"}, None)
+    assert (out["width"], out["height"]) == (600, 800)
+
+
+def test_decompression_bomb_warning_band_is_rejected(validate, aws, monkeypatch):
+    # Pillow warns between MAX_IMAGE_PIXELS and 2x that; the step treats it as an error too.
+    monkeypatch.setenv("MAX_PIXELS", str(800 * 600 - 1))
+    put(aws, "uploads/band.jpg", _jpeg((800, 600)))
+    out = validate.handler({"bucket": SOURCE, "key": "uploads/band.jpg"}, None)
+    assert out["valid"] is False

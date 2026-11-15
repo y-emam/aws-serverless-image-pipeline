@@ -30,6 +30,9 @@ class Handler(SimpleHTTPRequestHandler):
                 status, headers, data = resp.status, resp.headers, resp.read()
         except urllib.error.HTTPError as err:
             status, headers, data = err.code, err.headers, err.read()
+        except (urllib.error.URLError, TimeoutError) as err:
+            status, headers = 502, {"content-type": "application/json"}
+            data = ('{"error": "upstream unreachable: %s"}' % type(err).__name__).encode()
         self.send_response(status)
         self.send_header("content-type", headers.get("content-type", "application/octet-stream"))
         self.send_header("content-length", str(len(data)))

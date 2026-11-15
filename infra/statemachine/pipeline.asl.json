@@ -255,7 +255,7 @@
       "Retry": [
         {
           "Comment": "Transient DynamoDB errors only; a failed condition (record already COMPLETED) is not retried.",
-          "ErrorEquals": ["DynamoDB.ProvisionedThroughputExceededException", "DynamoDB.ThrottlingException", "DynamoDB.RequestLimitExceeded", "DynamoDB.InternalServerErrorException", "DynamoDB.SdkClientException"],
+          "ErrorEquals": ["DynamoDB.ProvisionedThroughputExceededException", "DynamoDB.ThrottlingException", "DynamoDB.RequestLimitExceeded", "DynamoDB.RequestLimitExceededException", "DynamoDB.InternalServerError", "DynamoDB.InternalServerErrorException", "DynamoDB.SdkClientException"],
           "IntervalSeconds": 2,
           "MaxAttempts": 3,
           "BackoffRate": 2

@@ -63,7 +63,7 @@ with Diagram(
 
     with Cluster("AI services"):
         rek = Rekognition("Rekognition\nDetectLabels")
-        bedrock = Bedrock("Bedrock\nClaude Haiku\n(optional)")
+        bedrock = Bedrock("Bedrock\nClaude Haiku / Nova Lite\n(optional)")
 
     with Cluster("Data"):
         processed = S3("Processed bucket\nimages/ (IA after 30d)")
@@ -93,6 +93,7 @@ with Diagram(
     consumer >> Edge(label="RECEIVED", style="dotted") >> table
 
     # workflow
+    source >> Edge(label="GetObject (originals)", style="dashed", color="gray") >> validate
     sfn >> validate >> [thumb, full, ai]
     [thumb, full, ai] >> meta
     ai >> [rek, bedrock]

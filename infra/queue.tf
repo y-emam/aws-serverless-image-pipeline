@@ -15,8 +15,10 @@ resource "aws_sqs_queue" "uploads" {
   # AWS guidance for Lambda consumers: at least 6x the function timeout (30 s),
   # to cover batching, throttling and retries.
   visibility_timeout_seconds = local.consumer_timeout * 6
-  receive_wait_time_seconds  = 20     # long polling: fewer empty receives, lower cost
-  message_retention_seconds  = 345600 # 4 days
+  # Long polling for any manual consumer (CLI, debugging). The Lambda event
+  # source mapping does its own long polling and ignores this setting.
+  receive_wait_time_seconds = 20
+  message_retention_seconds = 345600 # 4 days
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.uploads_dlq.arn
