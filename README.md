@@ -42,8 +42,15 @@ account. The code is the same for both, because it uses the model-agnostic Bedro
 ![Architecture diagram](docs/architecture.png)
 
 The diagram is generated from code: [`docs/diagram.py`](docs/diagram.py) uses the Python
-`diagrams` library with the official AWS icons. An editable version for draw.io is in
-[`docs/architecture.drawio`](docs/architecture.drawio).
+`diagrams` library with the official AWS icons.
+
+**Editable draw.io version.** The same architecture laid out by path (request path, event
+path, workflow, data stores, operations):
+[open it in draw.io](https://app.diagrams.net/#Uhttps%3A%2F%2Fraw.githubusercontent.com%2Fy-emam%2Faws-serverless-image-pipeline%2Fmain%2Fdocs%2Farchitecture.drawio)
+or download [`docs/architecture.drawio`](docs/architecture.drawio). It is also generated from
+code ([`docs/drawio.py`](docs/drawio.py)).
+
+![Architecture, draw.io version](docs/architecture-drawio.png)
 
 ## How it works
 
