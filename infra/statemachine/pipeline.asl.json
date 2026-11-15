@@ -288,7 +288,27 @@
           "BackoffRate": 2
         }
       ],
-      "Next": "Failed"
+      "Next": "WasRejected"
+    },
+
+    "WasRejected": {
+      "Type": "Choice",
+      "Comment": "A rejected upload (bad file) is an expected outcome, not a system failure: end in Succeed so the workflow-failed alarm only fires for real errors. The row is FAILED and the email is sent either way.",
+      "Choices": [
+        {
+          "And": [
+            { "Variable": "$.valid", "IsPresent": true },
+            { "Variable": "$.valid", "BooleanEquals": false }
+          ],
+          "Next": "Rejected"
+        }
+      ],
+      "Default": "Failed"
+    },
+
+    "Rejected": {
+      "Type": "Succeed",
+      "Comment": "Invalid upload recorded as FAILED in DynamoDB."
     },
 
     "Failed": {

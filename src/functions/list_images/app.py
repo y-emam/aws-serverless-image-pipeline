@@ -19,7 +19,7 @@ logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 MAX_ITEMS = 60
 PUBLIC_FIELDS = (
     "image_id", "status", "uploaded_at", "processed_at", "width", "height", "format",
-    "tags", "caption", "thumb_key", "full_key", "error_type",
+    "tags", "caption", "thumb_key", "full_key", "full_width", "full_height", "error_type",
 )
 
 

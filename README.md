@@ -2,7 +2,7 @@
 
 Upload an image in the browser. A few seconds later it has been validated, resized into a
 thumbnail and a web-size copy, watermarked, tagged by Amazon Rekognition, captioned by a
-Claude model on Amazon Bedrock, recorded in DynamoDB, and served through CloudFront. You get
+model on Amazon Bedrock, recorded in DynamoDB, and served through CloudFront. You get
 an email either way.
 
 Everything is serverless and pay-per-use: with no traffic the stack costs close to nothing,
@@ -12,8 +12,13 @@ This is my graduation project for the Manara course "AWS 2: Becoming a Solutions
 (SAA-C03 preparation), Project 2: Serverless Image Processing Pipeline with S3, SQS and Lambda.
 The AI tagging and captioning step is my own addition.
 
-- Live demo: _link added after deployment_
+- Live demo: https://dqy4z0thnvewm.cloudfront.net
 - Demo video: _link added after recording_
+
+The caption model is a Terraform variable (`bedrock_model_id`). The default is Claude Haiku 5.5
+(`us.anthropic.claude-haiku-5-5`). The live demo runs Amazon Nova Lite
+(`us.amazon.nova-lite-v1:0`) because Anthropic model access is still pending on the demo
+account. The code is the same for both, because it uses the model-agnostic Bedrock Converse API.
 
 ## Contents
 
@@ -44,7 +49,7 @@ The diagram is generated from code: [`docs/diagram.py`](docs/diagram.py) uses th
 
 1. **Get an upload URL.** The page calls `POST /api/uploads` on CloudFront, which forwards it
    to an API Gateway HTTP API. The `presign` Lambda returns an S3 pre-signed POST. The POST's
-   policy only allows one exact key (`uploads/<id>.jpg`), one content type (JPEG, PNG or WebP),
+   policy only allows one exact key (`uploads/<id>.<ext>`), one content type (JPEG, PNG or WebP),
    files of at most 10 MB, and expires after 5 minutes.
 2. **Upload straight to S3.** The browser sends the file directly to the private source bucket.
    The file never passes through API Gateway or Lambda, which avoids API Gateway's 10 MB request
@@ -59,7 +64,11 @@ The diagram is generated from code: [`docs/diagram.py`](docs/diagram.py) uses th
      a duplicate S3 event cannot start a second run
 
    If one message fails, only that message is returned to SQS (`ReportBatchItemFailures`).
-5. **The workflow runs** (Step Functions Standard):
+5. **The workflow runs** (Step Functions Standard). This diagram is generated from the
+   state machine definition by [`docs/workflow_diagram.py`](docs/workflow_diagram.py):
+
+   ![Step Functions workflow](docs/workflow.png)
+
    1. `validate` reads the file and checks the real format with Pillow, not the file
       extension. It also checks size and pixel count (decompression-bomb guard). A bad image is
       marked `FAILED` with the reason.
@@ -68,11 +77,13 @@ The diagram is generated from code: [`docs/diagram.py`](docs/diagram.py) uses th
       - `resize` writes a 1600 px copy to a private `staging/` prefix. `watermark` stamps it and
         publishes it under `images/`, so an un-watermarked copy is never public.
       - `ai_tag` sends a downscaled copy to Rekognition `DetectLabels` for tags. It also asks
-        Bedrock (Claude Haiku, through the Converse API) for one sentence of alt text.
+        Bedrock (through the Converse API) for one sentence of alt text.
    3. `write_metadata` writes the `COMPLETED` record: dimensions, tags, caption and output keys.
    4. SNS emails a summary with the CloudFront links.
 6. **On any failure,** the workflow marks the row `FAILED` directly through the Step Functions
-   DynamoDB integration (no extra Lambda) and emails the error.
+   DynamoDB integration (no extra Lambda) and emails the error. A rejected upload (a bad file)
+   then ends in a `Succeed` state called `Rejected`, because the system worked as designed.
+   Real errors end in `Fail`, so the "workflow failed" alarm only fires for those.
 7. **Serving.** One CloudFront distribution has three behaviors:
    - `/` serves the static site from the frontend bucket.
    - `/images/*` serves the processed bucket through Origin Access Control.
@@ -91,9 +102,9 @@ The diagram is generated from code: [`docs/diagram.py`](docs/diagram.py) uses th
 | Amazon SQS + DLQ | Buffer between S3 and processing | Decouples upload from processing. Absorbs bursts, retries automatically, and parks poison messages in the DLQ. S3 can also invoke Lambda directly, but then there is no buffer and no redrive. |
 | AWS Lambda | All compute | Pay per millisecond, no servers, scales to zero. arm64 (Graviton) is about 20% cheaper than x86. |
 | Lambda layer | Pillow | Large native dependency packaged once and shared by four functions. It is built from manylinux wheels for arm64, so it imports on Lambda even though it is built on Windows. |
-| AWS Step Functions (Standard) | Orchestration | Retries, error catching, parallel branches and a visual execution history, with no orchestration code to write. Standard (not Express) because each run is long-lived, auditable, and needs exactly-once semantics per execution name. |
+| AWS Step Functions (Standard) | Orchestration | Retries, error catching, parallel branches and a visual execution history, with no orchestration code to write. Standard, not Express: Standard runs each execution name exactly once (the duplicate-event protection relies on that) and keeps 90 days of execution history for debugging. Express is cheaper for high volume, but it is at-least-once and limited to 5 minutes per run. |
 | Amazon Rekognition | Image labels | Managed computer vision: one API call, no model to host. |
-| Amazon Bedrock | Captions (Claude Haiku) | Managed access to a foundation model, billed per token. Optional: switch it off with `enable_bedrock = false`. |
+| Amazon Bedrock | Captions (Claude Haiku 5.5 by default, Nova Lite on the demo account) | Managed access to foundation models, billed per token. The Converse API makes the model a configuration value. Optional: switch it off with `enable_bedrock = false`. |
 | Amazon DynamoDB | Image metadata | Key-value lookups by image id, on-demand billing, nothing to manage. RDS would bill by the hour even when idle. |
 | Amazon API Gateway (HTTP API) | Upload and gallery API | About 70% cheaper and faster than a REST API. We need none of the REST-only features (API keys, usage plans, request validation). |
 | Amazon CloudFront + OAC | Serves site, images and API | Edge caching and HTTPS, buckets stay private, one domain for everything (no CORS for the API). OAC is the current replacement for the older Origin Access Identity. |
@@ -170,7 +181,7 @@ CloudFront domain only.
 | Lambda service error or throttle in any step | Step Functions retries up to 3 times with exponential backoff and jitter |
 | Rekognition throttling | The `ai_tag` step retries with longer backoff |
 | Bedrock error or no model access | Image completes without a caption; reason stored in `caption_source` |
-| Not an image, wrong format, too big, too many pixels | Row marked `FAILED` with the reason, failure email |
+| Not an image, wrong format, too big, too many pixels | Row marked `FAILED` with the reason, failure email; the execution ends in `Rejected` (Succeed), so no alarm |
 | Any other error in the workflow | `Catch` -> row marked `FAILED` (unless already `COMPLETED`) -> failure email |
 | The consumer cannot start a workflow | The message returns to SQS; after 5 receives it goes to the DLQ -> `dlq-not-empty` alarm email |
 | Duplicate S3 event | Same execution name -> Step Functions rejects the duplicate -> treated as success |
@@ -227,7 +238,7 @@ Free-tier credits on a new account cover most of this.
 | Lambda (arm64) | about 5 GB-seconds per image, 5,000 GB-s total | under $0.10 |
 | Step Functions Standard | about 12 state transitions per image | about $0.30 |
 | Rekognition DetectLabels | 1,000 images | about $1.00 |
-| Bedrock Claude Haiku | about 1,000 input + 40 output tokens per image | about $0.15 |
+| Bedrock caption (Claude Haiku 5.5 or Nova Lite) | about 1,000 input + 40 output tokens per image | about $0.15 or less |
 | S3, DynamoDB, SQS, SNS, API Gateway, CloudFront | small volumes | under $0.20 |
 | CloudWatch alarms (10) and X-Ray | inside the free tier | $0 |
 | **Total** | | **about $1.75 per 1,000 images** |
@@ -252,7 +263,7 @@ Docker is optional.
 
 2. **Create your variables file** (gitignored) and set `aws_profile` and `alert_email`:
 
-       cp infra/terraform.tfvars.example infra/terraform.tfvars
+       cp infra/terraform.tfvars.example infra/terraform.tfvars        (Windows cmd: copy infra	erraform.tfvars.example infra	erraform.tfvars)
 
 3. **Create the budget alert first:**
 
@@ -261,14 +272,15 @@ Docker is optional.
 
 4. **Review the plan, then deploy everything.** CloudFront takes a few minutes.
 
-       terraform -chdir=infra plan -out=tfplan
-       terraform -chdir=infra apply tfplan
+       terraform -chdir=infra plan -out=deploy.tfplan
+       terraform -chdir=infra apply deploy.tfplan
 
 5. **Confirm the SNS subscription** from the email AWS sends you. Until you do, no
    notifications arrive.
 6. **Optional, for captions:** in the Bedrock console (us-east-1), open the chat playground
    once, choose Claude Haiku, and send any prompt. Anthropic models need a one-time use-case form
-   per account. Until that is done, images are processed without captions.
+   per account. Until that is done, images are processed without captions. If your account cannot
+   get Anthropic access, set `bedrock_model_id = "us.amazon.nova-lite-v1:0"` and apply again.
 7. **Open the site:**
 
        terraform -chdir=infra output site_url
@@ -285,7 +297,8 @@ They run offline with fake credentials:
 
 **End-to-end test** against the deployed stack:
 
-    AWS_PROFILE=<your profile> python tests/e2e/e2e_test.py
+    AWS_PROFILE=<your profile> python tests/e2e/e2e_test.py                  (bash)
+    $env:AWS_PROFILE="<your profile>"; python tests/e2e/e2e_test.py         (PowerShell)
 
 It uploads a real image and checks:
 - the row reaches `COMPLETED` with tags
@@ -295,7 +308,13 @@ It uploads a real image and checks:
 - the gallery API lists the image
 
 It then uploads a text file disguised as a JPEG and checks that it ends as `FAILED` /
-`InvalidImage`.
+`InvalidImage`. Last run against the deployed stack: all checks passed, 13 seconds from upload
+to `COMPLETED`.
+
+**Frontend preview without deploying:** `scripts/dev_server.py` serves `frontend/` on
+http://localhost:8000 and proxies `/api` and `/images` to the deployed CloudFront URL:
+
+    python scripts/dev_server.py https://<your-distribution>.cloudfront.net
 
 ## Tear down
 
@@ -313,11 +332,13 @@ behind.
     src/functions/<name>/   one folder per Lambda, handler in app.py
     src/layers/pillow/      layer requirements
     scripts/build_layer.py  builds the Pillow layer for the Lambda architecture
+    scripts/dev_server.py   local frontend preview against the deployed API
     frontend/               static site (HTML, CSS, JS)
     tests/unit/             pytest + moto
     tests/e2e/              end-to-end test against a deployed stack
     tests/images/           test images and the script that generates them
-    docs/                   architecture diagram (code, PNG, draw.io), screenshots
+    docs/                   architecture diagram (code, PNG, draw.io), workflow diagram
+                            (generated from the ASL), demo script, screenshots
 
 ## Screenshots
 

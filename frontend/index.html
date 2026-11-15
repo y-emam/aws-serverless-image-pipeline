@@ -4,31 +4,108 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Image Pipeline</title>
+  <meta name="description" content="Serverless image processing pipeline on AWS: upload, resize, watermark, AI tags and captions.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <h1>Serverless Image Pipeline</h1>
-    <p>Upload a JPEG, PNG or WebP (max 10 MB). It is validated, resized, watermarked, tagged by Rekognition and captioned by Bedrock.</p>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <a class="brand" href="./">
+        <img src="favicon.svg" alt="" width="28" height="28">
+        <span>Image Pipeline</span>
+      </a>
+      <a class="ghost-link" href="https://github.com/y-emam/aws-serverless-image-pipeline" target="_blank" rel="noopener">View on GitHub</a>
+    </div>
   </header>
 
-  <main>
-    <section class="upload">
-      <form id="upload-form">
-        <input type="file" id="file" accept="image/jpeg,image/png,image/webp" required>
-        <button type="submit" id="upload-btn">Upload</button>
+  <main class="wrap">
+    <section class="hero">
+      <div class="hero-text">
+        <h1>Upload an image. Watch the pipeline work.</h1>
+        <p>Every upload is validated, resized, watermarked, tagged by Amazon Rekognition and captioned by a model on Amazon Bedrock, then served through CloudFront. All serverless.</p>
+        <ol class="flow" aria-label="Pipeline steps">
+          <li>S3</li><li>SQS</li><li>Lambda</li><li>Step Functions</li><li>Rekognition + Bedrock</li><li>CloudFront</li>
+        </ol>
+      </div>
+
+      <form id="upload-form" class="uploader" novalidate>
+        <label id="dropzone" class="dropzone" for="file">
+          <input type="file" id="file" accept="image/jpeg,image/png,image/webp">
+          <div class="dz-empty">
+            <svg width="40" height="40" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5v2Zm0-10h4v6h6v-6h4l-7-7-7 7Z"/></svg>
+            <strong>Drop an image here</strong>
+            <span>or <u>browse</u> - JPEG, PNG or WebP, up to 10 MB</span>
+          </div>
+          <div class="dz-preview" hidden>
+            <img id="preview-img" alt="Selected image preview">
+            <div class="dz-file">
+              <strong id="preview-name"></strong>
+              <span id="preview-size"></span>
+            </div>
+          </div>
+        </label>
+
+        <div class="progress" id="progress" hidden>
+          <ol class="steps">
+            <li data-step="url">Upload URL</li>
+            <li data-step="upload">Upload</li>
+            <li data-step="process">Processing</li>
+            <li data-step="done">Done</li>
+          </ol>
+          <div class="bar"><span id="bar-fill"></span></div>
+        </div>
+
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+
+        <div class="actions">
+          <button type="button" class="btn secondary" id="clear-btn" hidden>Clear</button>
+          <button type="submit" class="btn primary" id="upload-btn" disabled>Upload and process</button>
+        </div>
       </form>
-      <p id="status" role="status" aria-live="polite"></p>
     </section>
 
-    <section>
+    <section class="gallery-section" aria-labelledby="gallery-title">
       <div class="gallery-head">
-        <h2>Gallery</h2>
-        <button type="button" id="refresh">Refresh</button>
+        <div>
+          <h2 id="gallery-title">Gallery</h2>
+          <p class="muted" id="gallery-count"></p>
+        </div>
+        <div class="gallery-tools">
+          <div class="tabs" role="group" aria-label="Filter images">
+            <button type="button" aria-pressed="true" data-filter="all">All</button>
+            <button type="button" aria-pressed="false" data-filter="COMPLETED">Processed</button>
+            <button type="button" aria-pressed="false" data-filter="FAILED">Failed</button>
+          </div>
+          <button type="button" class="icon-btn" id="refresh" aria-label="Refresh gallery" title="Refresh">
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35Z"/></svg>
+          </button>
+        </div>
       </div>
-      <div id="gallery" class="gallery"></div>
+      <div id="gallery" class="gallery" aria-live="polite"></div>
     </section>
   </main>
+
+  <footer class="wrap footer">
+    Built with S3, SQS, Lambda, Step Functions, Rekognition, Bedrock, DynamoDB, SNS and CloudFront. Infrastructure in Terraform.
+  </footer>
+
+  <dialog id="viewer" class="viewer" aria-labelledby="viewer-caption">
+    <button class="icon-btn close" id="viewer-close" aria-label="Close">
+      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+    </button>
+    <div class="viewer-body">
+      <div class="viewer-media"><img id="viewer-img" alt=""></div>
+      <aside class="viewer-info">
+        <p class="eyebrow">AI caption</p>
+        <h3 id="viewer-caption"></h3>
+        <p class="eyebrow">Rekognition tags</p>
+        <div id="viewer-tags" class="tags"></div>
+        <dl id="viewer-meta" class="meta-list"></dl>
+        <a id="viewer-open" class="btn secondary" target="_blank" rel="noopener">Open full size</a>
+      </aside>
+    </div>
+  </dialog>
 
   <script src="app.js"></script>
 </body>
